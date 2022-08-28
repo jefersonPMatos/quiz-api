@@ -1,12 +1,7 @@
-const JWT = require("jsonwebtoken");
-const config = require("../config/auth");
-const { validationResult } = require("express-validator");
-const { v4 } = require("uuid");
-const bcrypt = require("bcrypt");
+const nodemailer = require("nodemailer");
+const SMTP_CONFIG = require("../config/smtp");
 const admin = require("firebase-admin");
-
 const credentials = require("../config/serviceAccountKey.json");
-
 const bucketAdress = "form-multistep.appspot.com";
 
 admin.initializeApp({
@@ -15,127 +10,70 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-const bucket = admin.storage().bucket();
 
 const userFirestoreController = {
   registerUser: async (req, res) => {
-    console.log(req.body, req.file);
-    const errors = validationResult(req);
-    const { email, password, fullname, cel, birthday, terms } = req.body;
-    const avatar = req.file;
+    const id = req.body.docNumber;
+    const user = req.body;
+    const { email, name, score, question1, question2, question3 } = req.body;
 
-    const filename = `${v4()} - ${avatar.originalname}`;
-
-    const file = bucket.file(filename);
-
-    const stream = file.createWriteStream({
-      metadata: {
-        contentType: avatar.mimetype,
+    const transporter = nodemailer.createTransport({
+      host: SMTP_CONFIG.host,
+      port: SMTP_CONFIG.port,
+      secure: false,
+      auth: {
+        user: SMTP_CONFIG.user,
+        pass: SMTP_CONFIG.password,
+      },
+      tls: {
+        rejectUnauthorized: false,
       },
     });
 
-    stream.on("error", (err) => console.log(err));
+    const mailSent = await transporter.sendMail({
+      subject: "Resultado do seu Quiz",
+      from: "noreply@xpquiz.com",
+      to: email,
+      html: `
+      <html>
+      <body>
+      <strong>${name}</strong> você acertou: [x] perguntas, somando <strong>${score} ponto(s)</strong>. 
+      </br>
+      Abaixo suas respostas e as respostas corretas: 
+<hr/>
 
-    stream.on("finish", async () => {
-      await file.makePublic();
+Pergunta: <strong>${question1.question}</strong></br>
+Sua resposta: <strong>${question1.userAnswer}</strong></br>
+Resposta correta: <strong>${question1.correctAnswer}</strong>
+<hr/>
+Pergunta:<strong> ${question2.question}</strong></br>
+Sua resposta:<strong> ${question2.userAnswer}</strong></br>
+Resposta correta:<strong> ${question2.correctAnswer}</strong>
+<hr/>
+Pergunta: <strong> ${question3.question}</strong></br>
+Sua resposta: <strong>${question3.userAnswer}</strong> </br>
+Resposta correta:<strong> ${question3.correctAnswer}</strong>
+<hr/>
+      </body>
+      </html>
+      `,
     });
 
-    stream.end(avatar.buffer);
-
-    const saltRounds = 10;
-
-    const hash = bcrypt.hashSync(password, saltRounds);
-
-    const firebaseUrl = `https://storage.googleapis.com/${bucketAdress}/${filename}`;
-
-    const user = {
-      email,
-      password: hash,
-      fullname,
-      cel,
-      birthday,
-      avatar: firebaseUrl,
-      terms,
-    };
-
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors });
-    }
-
-    await db.collection("users").doc(email).set(user);
+    console.log(mailSent);
+    await db
+      .collection("usersQuiz")
+      .doc("" + id)
+      .set(user);
 
     return res.status(201).json({
       message: "Usuário cadastrado com sucesso!",
     });
   },
 
-  login: async (req, res) => {
-    const { email, password } = req.body;
-    console.log(req.body);
-
-    const userRef = db.collection("users").doc(email);
-    const userFound = await userRef.get();
-    const user = userFound.data();
-
-    if (!userFound.exists) {
-      return res.status(200).json({
-        message: "Usuário não encontrado",
-      });
-    }
-
-    const checkPassword = bcrypt.compareSync(password, user.password);
-
-    if (!checkPassword) {
-      return res.status(401).json({
-        message: "Usuário ou senha inválido!",
-      });
-    }
-
-    const token = JWT.sign(
-      {
-        userId: user.id,
-      },
-      config.secret,
-      {
-        expiresIn: config.expireIn,
-      }
-    );
-
-    return res.status(200).json({
-      user,
-      auth: true,
-      token,
-    });
-  },
-
-  update: async (req, res) => {
-    const { id } = req.params;
-    const { fullname, cel, birthday } = req.body;
-
-    const userRef = await db.collection("users").doc(id).update({
-      fullname,
-      cel,
-      birthday,
-    });
-
-    return res.status(204).json({
-      message: "Atualização bem sucedida",
-    });
-  },
-
-  delete: async (req, res) => {
-    const { id } = req.params;
-    const userRef = await db.collection("users").doc(id).delete();
-
-    return res.status(204).json({
-      message: "Cadastro deletado",
-    });
-  },
-
-  checkEmail: async (req, res) => {
+  checkDoc: async (req, res) => {
     const { id } = req.params;
 
-    const userRef = db.collection("users").doc(id);
+    const userRef = db.collection("usersQuiz").doc(id);
     const userFound = await userRef.get();
 
     if (!userFound.exists) {
